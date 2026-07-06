@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prompt Cache Breakpoint Linter</title>
+<meta name="description" content="Paste an Anthropic Messages API request and see exactly what gets cached at each breakpoint, and what dynamic content will silently bust the cache. Runs entirely in your browser." />
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #9198a1;
+    --accent: #58a6ff;
+    --good: #3fb950;
+    --bad: #f85149;
+    --warn: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+  }
+  main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 32px 20px 64px;
+  }
+  h1 {
+    font-size: 1.7rem;
+    margin: 0 0 8px;
+  }
+  h2 {
+    font-size: 1.15rem;
+    margin: 28px 0 10px;
+    border-top: 1px solid var(--border);
+    padding-top: 20px;
+  }
+  h3 {
+    font-size: 1rem;
+    margin: 16px 0 6px;
+  }
+  p.subhead {
+    color: var(--muted);
+    margin: 0 0 20px;
+    max-width: 68ch;
+  }
+  label {
+    display: block;
+    font-weight: 600;
+    font-size: 0.9rem;
+    margin: 18px 0 6px;
+  }
+  code, textarea, pre, .mono {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+  code {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 0.9em;
+  }
+  textarea {
+    width: 100%;
+    min-height: 220px;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    font-size: 0.9rem;
+    resize: vertical;
+  }
+  textarea.small {
+    min-height: 110px;
+  }
+  textarea:focus, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  .actions-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 14px 0;
+  }
+  button {
+    font: inherit;
+    font-size: 0.95rem;
+    padding: 10px 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    background: transparent;
+    color: var(--text);
+  }
+  button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  .btn-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #0d1117;
+    font-weight: 600;
+  }
+  .btn-secondary:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+  .error-alert {
+    background: #3d1418;
+    border: 1px solid var(--bad);
+    color: #ffd7d5;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 14px 0;
+  }
+  .error-alert ul {
+    margin: 6px 0 0;
+    padding-left: 20px;
+  }
+  .results {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 20px;
+    margin: 14px 0;
+  }
+  .hint {
+    color: var(--muted);
+    margin: 0;
+  }
+  .summary-line {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin: 0 0 14px;
+  }
+  .summary-line.status-clean { color: var(--good); }
+  .summary-line.status-found { color: var(--bad); }
+  .summary-line.status-none { color: var(--muted); }
+  table.block-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+    margin: 10px 0 4px;
+  }
+  table.block-table th, table.block-table td {
+    text-align: left;
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  table.block-table th {
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .cache-status {
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .cache-status.cached { color: var(--good); }
+  .cache-status.uncached { color: var(--muted); }
+  .cache-status.flagged { color: var(--bad); }
+  .row-flagged { background: rgba(248, 81, 73, 0.08); }
+  .snippet {
+    color: var(--muted);
+    word-break: break-word;
+  }
+  .flag-list {
+    margin: 8px 0 0;
+    padding-left: 20px;
+    font-size: 0.92rem;
+  }
+  .flag-list li { margin-bottom: 10px; }
+  .flag-list .flag-category {
+    font-weight: 600;
+    color: var(--bad);
+  }
+  .flag-list .flag-value {
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  .usage-lines {
+    margin: 10px 0 0;
+    padding-left: 20px;
+    font-size: 0.92rem;
+  }
+  .usage-lines li { margin-bottom: 6px; }
+  ul.category-list li, ul.source-list li {
+    margin-bottom: 10px;
+  }
+  .privacy-note {
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin-top: 24px;
+  }
+  footer {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 20px 40px;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Prompt Cache Breakpoint Linter</h1>
+  <p class="subhead">
+    Paste an Anthropic Messages API request with <code>cache_control</code> markers and see
+    exactly what is cached at each breakpoint, and any dynamic-looking content sitting before
+    a breakpoint that will silently break the cache.
+  </p>
+
+  <label for="requestInput">Messages API request body (JSON)</label>
+  <div class="actions-row">
+    <button type="button" id="loadGoodBtn" class="btn-secondary">Load good example</button>
+    <button type="button" id="loadBustingBtn" class="btn-secondary">Load cache-busting example</button>
+    <button type="button" id="analyzeBtn" class="btn-primary">Analyze request</button>
+  </div>
+  <textarea id="requestInput" placeholder="Paste a Messages API request body here, or click one of the load-example buttons."></textarea>
+
+  <div class="error-alert" id="requestErrorAlert" hidden>
+    <strong>Could not analyze this input:</strong>
+    <ul id="requestErrorList"></ul>
+  </div>
+
+  <section class="results" id="requestResults">
+    <p class="hint" id="requestHint">
+      Paste a request above and click Analyze, or click one of the load-example buttons to
+      see a cache-busting timestamp flagged in one click.
+    </p>
+  </section>
+
+  <h2>Usage explainer (optional)</h2>
+  <p>
+    Paste the <code>usage</code> object from an API response to get a plain-English read on
+    <code>cache_creation_input_tokens</code>, <code>cache_read_input_tokens</code>, and
+    <code>input_tokens</code>.
+  </p>
+  <label for="usageInput">Usage object (JSON)</label>
+  <div class="actions-row">
+    <button type="button" id="loadUsageHitBtn" class="btn-secondary">Load cache-hit example</button>
+    <button type="button" id="loadUsageMissBtn" class="btn-secondary">Load cache-miss example</button>
+    <button type="button" id="explainBtn" class="btn-primary">Explain usage</button>
+  </div>
+  <textarea id="usageInput" class="small" placeholder='e.g. { "input_tokens": 15, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 1842, "output_tokens": 210 }'></textarea>
+
+  <div class="error-alert" id="usageErrorAlert" hidden>
+    <strong>Could not explain this input:</strong>
+    <ul id="usageErrorList"></ul>
+  </div>
+
+  <section class="results" id="usageResults">
+    <p class="hint" id="usageHint">
+      Paste a usage object above and click Explain usage, or load one of the examples.
+    </p>
+  </section>
+
+  <section id="howItWorks">
+    <h2>How it works</h2>
+    <p>
+      Anthropic evaluates prompt caching against a cumulative prefix in a fixed order:
+      <strong>tools, then the system prompt, then messages</strong>, in conversation order.
+      A <code>cache_control</code> marker on any block is a breakpoint: everything from the
+      start of the request up to and including that block is what gets cached. This tool
+      rebuilds that same ordered list from your pasted JSON, marks which blocks fall at or
+      before each breakpoint, and scans only the blocks that are actually cached for content
+      that looks like it changes on every request.
+    </p>
+    <h3>What it checks</h3>
+    <ul class="category-list">
+      <li><strong>ISO 8601 timestamps</strong> and <strong>calendar dates</strong>, for example <code class="mono">2026-07-06T14:32:07Z</code>.</li>
+      <li><strong>UUIDs</strong>, the standard 8-4-4-4-12 hex format used for request and session ids.</li>
+      <li><strong>Unix epoch timestamps</strong> in seconds or milliseconds, the shape a raw <code class="mono">Date.now()</code> call produces.</li>
+      <li><strong>Per-request identifiers</strong>: a small heuristic for tokens like <code class="mono">session_</code>, <code class="mono">request_</code>, or <code class="mono">trace_</code> followed by an id.</li>
+      <li><strong>Relative-time phrases</strong> such as "current time" or "as of now", a sign the surrounding text is likely generated fresh per call.</li>
+    </ul>
+    <p>
+      This is a heuristic, not a guarantee. It only flags content it recognizes, and it can miss
+      a dynamic value with no obvious shape (a user's name, for example). It also only scans
+      text it can read: image blocks are skipped since they carry binary data, not authored
+      text. Content placed <em>after</em> the last breakpoint is never flagged, because
+      uncached content is expected to change on every call; that is exactly where dynamic
+      content belongs.
+    </p>
+    <h3>Sources</h3>
+    <ul class="source-list">
+      <li>Anthropic, prompt caching documentation (cumulative prefix, tools then system then messages order, breakpoint behavior): https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching</li>
+      <li>Anthropic, Messages API reference for cache_control and usage fields: https://docs.anthropic.com/en/api/messages</li>
+      <li>A widely shared community writeup on prompt caching savings and its one common gotcha: a timestamp or other per-request value placed inside the cached system prompt invalidates the whole prefix on every single call, silently turning an intended 90 percent discount into a full-price cache write every time.</li>
+    </ul>
+  </section>
+
+  <p class="privacy-note">
+    Everything above runs in your browser. Nothing you paste is uploaded, stored, or sent
+    anywhere. Open your browser's Network tab while you use this page and it stays empty.
+  </p>
+</main>
+
+<footer>
+  <p>Built by Ben Godgart as a job-search portfolio piece. Client-side only, no backend, no accounts, no analytics.</p>
+</footer>
+
+<script src="core.js"></script>
+<script>
+(function () {
+  var requestInput = document.getElementById('requestInput');
+  var analyzeBtn = document.getElementById('analyzeBtn');
+  var loadGoodBtn = document.getElementById('loadGoodBtn');
+  var loadBustingBtn = document.getElementById('loadBustingBtn');
+  var requestErrorAlert = document.getElementById('requestErrorAlert');
+  var requestErrorList = document.getElementById('requestErrorList');
+  var requestResults = document.getElementById('requestResults');
+
+  var usageInput = document.getElementById('usageInput');
+  var explainBtn = document.getElementById('explainBtn');
+  var loadUsageHitBtn = document.getElementById('loadUsageHitBtn');
+  var loadUsageMissBtn = document.getElementById('loadUsageMissBtn');
+  var usageErrorAlert = document.getElementById('usageErrorAlert');
+  var usageErrorList = document.getElementById('usageErrorList');
+  var usageResults = document.getElementById('usageResults');
+
+  var CATEGORY_LABELS = {
+    iso_timestamp: 'ISO timestamp',
+    iso_date: 'Calendar date',
+    uuid: 'UUID',
+    epoch_millis: 'Unix timestamp (ms)',
+    epoch_seconds: 'Unix timestamp (s)',
+    per_request_id: 'Per-request ID',
+    relative_time_phrase: 'Relative time phrase',
+  };
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function snippetOf(text, maxLen) {
+    if (!text) return '(empty)';
+    var flat = String(text).replace(/\s+/g, ' ').trim();
+    if (flat.length <= maxLen) return flat;
+    return flat.slice(0, maxLen) + '…';
+  }
+
+  function showErrors(alertEl, listEl, messages) {
+    listEl.innerHTML = '';
+    messages.forEach(function (msg) {
+      var li = document.createElement('li');
+      li.textContent = msg;
+      listEl.appendChild(li);
+    });
+    alertEl.hidden = false;
+  }
+
+  function clearErrors(alertEl, listEl) {
+    alertEl.hidden = true;
+    listEl.innerHTML = '';
+  }
+
+  function renderRequestResults(analysis) {
+    var html = '';
+    var breakpointCount = analysis.breakpoints.length;
+    var flagCount = analysis.flags.length;
+
+    var summaryClass = flagCount > 0 ? 'status-found' : (breakpointCount > 0 ? 'status-clean' : 'status-none');
+    var summary;
+    if (breakpointCount === 0) {
+      summary = 'No cache_control breakpoints found. Nothing in this request will be cached.';
+    } else if (flagCount > 0) {
+      summary = flagCount + ' problem' + (flagCount === 1 ? '' : 's') + ' found: dynamic-looking content sits before a cache breakpoint and will bust the cache.';
+    } else {
+      summary = breakpointCount + ' cache breakpoint' + (breakpointCount === 1 ? '' : 's') + ' found. No cache-busting content detected in the cached region.';
+    }
+    html += '<p class="summary-line ' + summaryClass + '">' + escapeHtml(summary) + '</p>';
+
+    // Assign a display number to each breakpoint, in order.
+    var breakpointNumber = {};
+    analysis.breakpoints.forEach(function (bp, i) {
+      breakpointNumber[bp.index] = i + 1;
+    });
+
+    var flagsByBlock = {};
+    analysis.flags.forEach(function (f) {
+      if (!flagsByBlock[f.blockIndex]) flagsByBlock[f.blockIndex] = [];
+      flagsByBlock[f.blockIndex].push(f);
+    });
+
+    html += '<table class="block-table"><thead><tr>';
+    html += '<th>#</th><th>Block</th><th>Cache status</th><th>Preview</th>';
+    html += '</tr></thead><tbody>';
+    analysis.blocks.forEach(function (b) {
+      var blockFlags = flagsByBlock[b.index] || [];
+      var statusHtml;
+      if (blockFlags.length > 0) {
+        statusHtml = '<span class="cache-status flagged">Cached, will bust (' + blockFlags.length + ')</span>';
+      } else if (b.hasCacheControl) {
+        statusHtml = '<span class="cache-status cached">Cached (breakpoint ' + breakpointNumber[b.index] + ')</span>';
+      } else if (b.cached) {
+        statusHtml = '<span class="cache-status cached">Cached (through breakpoint ' + breakpointNumber[b.coveringBreakpointIndex] + ')</span>';
+      } else {
+        statusHtml = '<span class="cache-status uncached">Not cached, sent fresh</span>';
+      }
+      var text = window.blockSearchableText(b.raw);
+      var rowClass = blockFlags.length > 0 ? ' class="row-flagged"' : '';
+      html += '<tr' + rowClass + '>';
+      html += '<td>' + b.index + '</td>';
+      html += '<td>' + escapeHtml(b.label) + '</td>';
+      html += '<td>' + statusHtml + '</td>';
+      html += '<td class="snippet">' + escapeHtml(snippetOf(text, 90)) + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+
+    if (flagCount > 0) {
+      html += '<h3>Flagged issues</h3>';
+      html += '<ul class="flag-list">';
+      analysis.flags.forEach(function (f) {
+        var label = CATEGORY_LABELS[f.category] || f.category;
+        html += '<li><span class="flag-category">' + escapeHtml(label) + '</span> in '
+          + escapeHtml(f.blockLabel) + ': <span class="flag-value">' + escapeHtml(f.value) + '</span><br>'
+          + escapeHtml(f.explanation) + '</li>';
+      });
+      html += '</ul>';
+    }
+
+    requestResults.innerHTML = html;
+  }
+
+  function runAnalyze() {
+    clearErrors(requestErrorAlert, requestErrorList);
+    var raw = requestInput.value.trim();
+    if (raw.length === 0) {
+      showErrors(requestErrorAlert, requestErrorList, ['Paste a request body first, or click a load-example button.']);
+      return;
+    }
+    var data;
+    try {
+      data = JSON.parse(raw);
+    } catch (e) {
+      showErrors(requestErrorAlert, requestErrorList, ['This is not valid JSON: ' + e.message]);
+      return;
+    }
+    var analysis = window.analyzeRequest(data);
+    if (!analysis.ok) {
+      showErrors(requestErrorAlert, requestErrorList, analysis.errors);
+      return;
+    }
+    renderRequestResults(analysis);
+  }
+
+  function loadGood() {
+    clearErrors(requestErrorAlert, requestErrorList);
+    requestInput.value = JSON.stringify(window.EXAMPLE_GOOD_REQUEST, null, 2);
+    runAnalyze();
+  }
+
+  function loadBusting() {
+    clearErrors(requestErrorAlert, requestErrorList);
+    requestInput.value = JSON.stringify(window.EXAMPLE_BUSTING_REQUEST, null, 2);
+    runAnalyze();
+  }
+
+  function renderUsageResults(explained) {
+    var html = '<p class="summary-line status-clean">' + escapeHtml(explained.verdict) + '</p>';
+    html += '<ul class="usage-lines">';
+    explained.lines.forEach(function (line) {
+      html += '<li>' + escapeHtml(line) + '</li>';
+    });
+    html += '</ul>';
+    usageResults.innerHTML = html;
+  }
+
+  function runExplain() {
+    clearErrors(usageErrorAlert, usageErrorList);
+    var raw = usageInput.value.trim();
+    if (raw.length === 0) {
+      showErrors(usageErrorAlert, usageErrorList, ['Paste a usage object first, or click a load-example button.']);
+      return;
+    }
+    var data;
+    try {
+      data = JSON.parse(raw);
+    } catch (e) {
+      showErrors(usageErrorAlert, usageErrorList, ['This is not valid JSON: ' + e.message]);
+      return;
+    }
+    var explained = window.explainUsage(data);
+    if (!explained.ok) {
+      showErrors(usageErrorAlert, usageErrorList, explained.errors);
+      return;
+    }
+    renderUsageResults(explained);
+  }
+
+  function loadUsageHit() {
+    clearErrors(usageErrorAlert, usageErrorList);
+    usageInput.value = JSON.stringify(window.EXAMPLE_USAGE_HIT, null, 2);
+    runExplain();
+  }
+
+  function loadUsageMiss() {
+    clearErrors(usageErrorAlert, usageErrorList);
+    usageInput.value = JSON.stringify(window.EXAMPLE_USAGE_MISS, null, 2);
+    runExplain();
+  }
+
+  analyzeBtn.addEventListener('click', runAnalyze);
+  loadGoodBtn.addEventListener('click', loadGood);
+  loadBustingBtn.addEventListener('click', loadBusting);
+  explainBtn.addEventListener('click', runExplain);
+  loadUsageHitBtn.addEventListener('click', loadUsageHit);
+  loadUsageMissBtn.addEventListener('click', loadUsageMiss);
+})();
+</script>
+</body>
+</html>
